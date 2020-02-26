@@ -1,0 +1,160 @@
+---
+title: "Social_Engagement_Assignment1"
+author: "Group 5 - Astrid, Kata, Nicole, Sofie"
+date: "20/2/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse, pacman)
+pacman::p_load(lme4, DHARMa, jpeg, grid, ggpubr, ggrepel, kableExtra, lmerTest)
+ggplot2::theme_set(theme_bw())
+```
+
+
+```{r load data}
+#Samples <- read_csv("Exported_EyeLink_data/Cleaned/Samples_merged_final.csv") %>% 
+#  mutate(GazeY = 1051-GazeY, Fix_MeanY = 1051-Fix_MeanY) %>% 
+#  filter(Time<=41202)
+
+Samples <- read_csv("Exported_EyeLink_data/Cleaned/Samples_merged_final.csv", col_types = cols(
+ParticipantID = col_character(),
+ParticipantGender = col_character(),
+EyeTracked = col_character(),
+Task = col_character(),
+SearchOrder = col_double(),
+ForagingType = col_character(),
+Trial = col_double(),
+Stimulus = col_character(),
+Video = col_character(),
+Time = col_double(),
+GazeX = col_double(),
+#GazeY = col_double(),
+PupilSize = col_double(),
+FixationNo = col_double(),
+Fix_StartTime = col_double(),
+Fix_EndTime = col_double(),
+Fix_Duration = col_double(),
+Fix_MeanX = col_double(),
+#Fix_MeanY = col_double(),
+Fix_MeanPupilSize = col_double(),
+SaccadeNo = col_double(),
+Sac_StartTime = col_double(),
+Sac_EndTime = col_double(),
+Sac_Duration = col_double(),
+Sac_StartX = col_double(),
+Sac_StartY = col_double(),
+Sac_EndX = col_double(),
+Sac_EndY = col_double(),
+Sac_PeakVelocity = col_double(),
+Sac_MeanVelocity = col_double(),
+Sac_Blink = col_logical(),
+Sac_Direction = col_character(),
+Sac_Amplitude = col_double()))  %>% 
+  mutate(GazeY = 1051-GazeY, Fix_MeanY = 1051-Fix_MeanY) %>% 
+  filter(Time<=41202)
+
+#creating new colums with the information from the video column
+Add_Info <- function(df){
+  
+  df$Video_EyeBrow[grepl("+o",df$Video)]='Yes'
+  df$Video_EyeBrow[grepl("-o",df$Video)]='No'
+  
+  df$Video_Direction[grepl("div",df$Video)]='Away'
+  df$Video_Direction[grepl("dir",df$Video)]='Directed'
+  
+  return(df)
+}
+
+Samples <- Add_Info(Samples)
+
+```
+
+
+```{r}
+#Make a table of the numbers of males and females in the different Tasks
+males <- Samples %>% group_by(ParticipantGender, ParticipantID, Task) %>% summarize(count=n())
+
+dominans <- Samples %>% group_by(EyeTracked, ParticipantID, Task) %>% summarize(count=n())
+```
+
+```{r}
+######## ANALYSIS ###########
+
+#make things factors (if they should be)
+class(Samples$PupilSize)
+Samples$Video_Direction <- as.factor(Samples$Video_Direction) 
+Samples$Video_EyeBrow <- as.factor(Samples$Video_EyeBrow)
+Samples$ParticipantID <- as.factor(Samples$ParticipantID)
+
+#subset with only SocialEngagement
+Social <- Samples[!is.na(Samples$PupilSize) & Samples$Task == "SocialEngagement",] %>% #no NAs in PupilSize
+  group_by(ParticipantID, Trial) %>% 
+  summarize(PupilSize = mean(PupilSize), Video = Video[1], Video_EyeBrow = Video_EyeBrow[1], Video_Direction = Video_Direction[1]) %>% 
+  filter(!is.na(PupilSize))
+
+m1 <- lme4::glmer(PupilSize ~ 1 + Video_Direction * Video_EyeBrow + (1 + Video_Direction * Video_EyeBrow | ParticipantID), family = gaussian(link = "log"), data = Social)
+
+m2 <- lme4::glmer(PupilSize ~ 1 + Video_Direction + Video_EyeBrow + (1 + Video_Direction + Video_EyeBrow | ParticipantID), family = gaussian(link = "log"), data = Social)
+
+m3 <- lme4::glmer(PupilSize ~ 0 + Video_Direction + Video_EyeBrow + (0 + Video_Direction + Video_EyeBrow | ParticipantID), family = gaussian(link = "log"), data = Social)
+
+summary(m1)
+summary(m2)
+summary(m3)
+
+#change the summary statistics to non-log-normal numbers!
+exp(8.76)
+exp(8.76 + 0.03)
+
+MuMIn::r.squaredGLMM(m2)
+
+```
+
+################################### FORAGING ##################################
+
+```{r}
+Saccades <- Samples[!is.na(Samples$SaccadeNo) & Samples$Task == "Foraging",] %>% #no NAs in Saccadenumber
+  group_by(ParticipantID, Trial, SaccadeNo) %>% 
+  summarize(SaccadeAmplitude = mean(Sac_Amplitude), ForagingType = ForagingType[1], Stimulus = Stimulus[1]) %>% 
+  filter(!is.na(SaccadeAmplitude))
+
+f_m1 <- glmer(SaccadeAmplitude ~ ForagingType + (1 + ForagingType | ParticipantID) + (1 + ForagingType | Stimulus),    family = gaussian(link = "log"), data = Saccades)
+
+summary(f_m1)
+
+
+MuMIn::r.squaredGLMM(f_m1)
+
+#Scanpaths
+## Here I am making the scanpath for one participant in one trial
+x = subset(Samples, ParticipantID ==	'F7_2' & Stimulus == 'sheep.jpg')
+
+## Let's make a summary dataset
+Fix <- x[!is.na(x$FixationNo),] %>% 
+  group_by(FixationNo) %>% # since I only have one participant and one trial
+  summarize(MeanX = Fix_MeanX[1], MeanY = Fix_MeanY[1], Duration = Fix_Duration[1]) %>% 
+  filter(Duration>=200) # only keep fixations > 300 ms
+
+## get the picture
+img <- jpeg::readJPEG('stimuli_Foraging/sheep.jpg')  
+img <- grid::rasterGrob(img, width=unit(1, "npc"), height = unit(1,"npc"),
+                        interpolate = FALSE)
+##Plot it
+## F8_1 for search and F7_2 for count
+ggplot(Fix, aes(MeanX, MeanY, color = Fix$FixationNo)) + 
+  annotation_custom(img, xmin = 0, xmax = 1680, ymin = 0, ymax = 1050) +
+  geom_path(color = "yellow") +
+  geom_point(size = Fix$Duration*.02, alpha = .6) +
+  ggrepel::geom_text_repel(aes(label = Fix$Duration), size = 3, color = "white") +
+  xlim(0,1680) + ylim(0,1050) + 
+  theme(legend.position = "none", axis.title = element_blank()) +
+  ggtitle("Counting")
+
+
+```
+
+
+
